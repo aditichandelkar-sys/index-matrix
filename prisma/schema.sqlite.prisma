@@ -1,0 +1,398 @@
+// SQLite Prisma Schema for Local Development & Isolated Testing
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String         @id @default(uuid())
+  email           String         @unique
+  passwordHash    String
+  name            String
+  role            String         @default("CUSTOMER") // "OWNER" | "CUSTOMER"
+  creditMode      String         @default("LIMITED")  // "LIMITED" | "UNLIMITED"
+  status          String         @default("ACTIVE")   // "ACTIVE" | "SUSPENDED"
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  wallet          CreditWallet?
+  sessions        Session[]
+  apiKeys         ApiKey[]
+  projects        Project[]
+  googleAccounts  GoogleAccount[]
+  transactions    CreditTransaction[]
+  payments        Payment[]
+  auditLogs       AuditLog[]
+  indexJobs       IndexJob[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  token        String   @unique
+  expiresAt    DateTime
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+model CreditWallet {
+  id                 String              @id @default(uuid())
+  userId             String              @unique
+  balance            Int                 @default(0)
+  lifetimeUsed       Int                 @default(0)
+  lifetimePurchased  Int                 @default(0)
+  version            Int                 @default(1)
+  updatedAt          DateTime            @updatedAt
+
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions       CreditTransaction[]
+
+  @@index([userId])
+}
+
+model CreditTransaction {
+  id             String          @id @default(uuid())
+  walletId       String
+  userId         String
+  amount         Int
+  balanceAfter   Int
+  type           String          // PURCHASE, USAGE, ADMIN_ADD, ADMIN_REMOVE, REFUND, BONUS, ADJUSTMENT
+  idempotencyKey String?         @unique
+  reason         String?
+  referenceId    String?
+  metadata       String?
+  createdAt      DateTime        @default(now())
+
+  wallet         CreditWallet    @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([walletId])
+  @@index([userId])
+  @@index([type])
+  @@index([idempotencyKey])
+}
+
+model Project {
+  id          String                  @id @default(uuid())
+  userId      String
+  name        String
+  domain      String
+  description String?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+
+  user        User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  urls        Url[]
+  sitemaps    Sitemap[]
+  properties  SearchConsoleProperty[]
+  imports     Import[]
+
+  @@index([userId])
+  @@index([domain])
+}
+
+model GoogleAccount {
+  id                   String                  @id @default(uuid())
+  userId               String
+  email                String
+  encryptedAccessToken String
+  encryptedRefreshToken String?
+  tokenExpiresAt       DateTime
+  scopes               String
+  status               String                  @default("ACTIVE")
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+
+  user                 User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  properties           SearchConsoleProperty[]
+
+  @@index([userId])
+  @@index([email])
+}
+
+model SearchConsoleProperty {
+  id              String         @id @default(uuid())
+  googleAccountId String
+  projectId       String?
+  propertyUrl     String
+  permissionLevel String?
+  isVerified      Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  googleAccount   GoogleAccount  @relation(fields: [googleAccountId], references: [id], onDelete: Cascade)
+  project         Project?       @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  urls            Url[]
+
+  @@unique([googleAccountId, propertyUrl])
+  @@index([projectId])
+  @@index([propertyUrl])
+}
+
+model Url {
+  id                String             @id @default(uuid())
+  projectId         String
+  originalUrl       String
+  normalizedUrl     String
+  hostname          String
+  path              String
+  status            String             @default("IMPORTED")
+  httpStatus        Int?
+  lastCrawl         DateTime?
+  lastInspectedAt   DateTime?
+  lastAnalyzedAt    DateTime?
+  matchedPropertyId String?
+  creditsUsed       Int                @default(0)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  project           Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  matchedProperty   SearchConsoleProperty? @relation(fields: [matchedPropertyId], references: [id], onDelete: SetNull)
+  analyses          UrlAnalysis[]
+  inspections       GoogleInspection[]
+  statusHistory     UrlStatusHistory[]
+  indexJobs         IndexJob[]
+  crawlEvents       CrawlEvent[]
+
+  @@unique([projectId, normalizedUrl])
+  @@index([projectId])
+  @@index([normalizedUrl])
+  @@index([status])
+  @@index([hostname])
+}
+
+model UrlStatusHistory {
+  id        String    @id @default(uuid())
+  urlId     String
+  oldStatus String?
+  newStatus String
+  source    String
+  reason    String?
+  createdAt DateTime  @default(now())
+
+  url       Url       @relation(fields: [urlId], references: [id], onDelete: Cascade)
+
+  @@index([urlId])
+  @@index([createdAt])
+}
+
+model UrlAnalysis {
+  id               String   @id @default(uuid())
+  urlId            String
+  httpStatus       Int
+  redirectChain    String
+  responseTimeMs   Int
+  contentType      String?
+  title            String?
+  metaDescription  String?
+  robotsMeta       String?
+  canonicalUrl     String?
+  xRobotsTag       String?
+  robotsTxtStatus  String?
+  issues           String
+  passedAudit      Boolean  @default(false)
+  hasStructuredJob Boolean  @default(false)
+  analyzedAt       DateTime @default(now())
+
+  url              Url      @relation(fields: [urlId], references: [id], onDelete: Cascade)
+
+  @@index([urlId])
+}
+
+model GoogleInspection {
+  id              String   @id @default(uuid())
+  urlId           String
+  verdict         String
+  coverageState   String?
+  indexingState   String?
+  robotsTxtState  String?
+  pageFetchState  String?
+  googleCanonical String?
+  userCanonical   String?
+  crawledAs       String?
+  lastCrawlTime   DateTime?
+  rawResponse     String
+  inspectedAt     DateTime @default(now())
+
+  url             Url      @relation(fields: [urlId], references: [id], onDelete: Cascade)
+
+  @@index([urlId])
+}
+
+model IndexJob {
+  id             String         @id @default(uuid())
+  userId         String
+  urlId          String?
+  operation      String
+  status         String         @default("PENDING")
+  attempts       Int            @default(0)
+  maxAttempts    Int            @default(3)
+  idempotencyKey String?        @unique
+  error          String?
+  metadata       String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url            Url?           @relation(fields: [urlId], references: [id], onDelete: Cascade)
+  attemptsList   IndexAttempt[]
+
+  @@index([userId])
+  @@index([urlId])
+  @@index([status])
+}
+
+model IndexAttempt {
+  id             String   @id @default(uuid())
+  jobId          String
+  attemptNumber  Int
+  status         String
+  responseStatus Int?
+  responseBody   String?
+  error          String?
+  createdAt      DateTime @default(now())
+
+  job            IndexJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+}
+
+model Sitemap {
+  id              String    @id @default(uuid())
+  projectId       String
+  sitemapUrl      String
+  isIndex         Boolean   @default(false)
+  urlCount        Int       @default(0)
+  lastProcessedAt DateTime?
+  status          String    @default("PENDING")
+  errorMessage    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  project         Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model Import {
+  id          String   @id @default(uuid())
+  projectId   String
+  sourceType  String
+  totalUrls   Int      @default(0)
+  validUrls   Int      @default(0)
+  invalidUrls Int      @default(0)
+  status      String   @default("COMPLETED")
+  errorReport String?
+  createdAt   DateTime @default(now())
+
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model CrawlEvent {
+  id        String   @id @default(uuid())
+  urlId     String
+  source    String
+  userAgent String?
+  details   String?
+  timestamp DateTime @default(now())
+
+  url       Url      @relation(fields: [urlId], references: [id], onDelete: Cascade)
+
+  @@index([urlId])
+  @@index([timestamp])
+}
+
+model Payment {
+  id             String        @id @default(uuid())
+  userId         String
+  provider       String
+  providerTxId   String        @unique
+  amountCents    Int
+  currency       String        @default("usd")
+  creditsGranted Int
+  status         String        @default("PENDING")
+  metadata       String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([providerTxId])
+}
+
+model WebhookEvent {
+  id             String   @id @default(uuid())
+  provider       String
+  eventId        String   @unique
+  eventType      String
+  payload        String
+  processed      Boolean  @default(false)
+  error          String?
+  createdAt      DateTime @default(now())
+
+  @@index([eventId])
+  @@index([provider])
+}
+
+model ApiKey {
+  id          String    @id @default(uuid())
+  userId      String
+  name        String
+  keyPrefix   String
+  keyHash     String    @unique
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([keyHash])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  targetId  String?
+  ipAddress String?
+  userAgent String?
+  details   String?
+  createdAt DateTime @default(now())
+
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@index([key])
+}
