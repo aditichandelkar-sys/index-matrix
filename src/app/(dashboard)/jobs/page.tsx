@@ -11,20 +11,19 @@ export default function JobsQueuePage() {
   const loadJobs = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/urls?limit=25');
+      const res = await fetch('/api/jobs?limit=25');
       const data = await res.json();
-      if (data.success) {
-        // Derive recent background jobs from analyses and inspections
-        const mockJobs = (data.urls || []).map((u: any, idx: number) => ({
-          id: `job_${u.id.slice(0, 8)}`,
-          operation: u.status === 'INDEXED' ? 'INSPECT' : 'ANALYZE',
-          targetUrl: u.normalizedUrl,
-          status: u.status === 'ERROR' ? 'FAILED' : 'COMPLETED',
-          attempts: 1,
-          createdAt: u.lastAnalyzedAt || u.createdAt,
-          error: u.status === 'ERROR' ? 'HTTP 404 or Target Unresponsive' : null,
+      if (data.success && data.jobs) {
+        const realJobs = data.jobs.map((j: any) => ({
+          id: `job_${j.id.slice(0, 8)}`,
+          operation: j.operation,
+          targetUrl: j.url?.normalizedUrl || 'Workspace Operation',
+          status: j.status,
+          attempts: j.attempts,
+          createdAt: j.createdAt,
+          error: j.error,
         }));
-        setJobs(mockJobs);
+        setJobs(realJobs);
       }
     } catch {}
     finally {
@@ -105,6 +104,8 @@ export default function JobsQueuePage() {
                           className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase ${
                             j.status === 'COMPLETED'
                               ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                              : j.status === 'PROCESSING' || j.status === 'PENDING'
+                              ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 animate-pulse'
                               : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
                           }`}
                         >

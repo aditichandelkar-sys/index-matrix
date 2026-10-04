@@ -41,7 +41,11 @@ export async function GET(req: NextRequest) {
       where.normalizedUrl = { contains: search };
     }
 
-    const [urls, total] = await Promise.all([
+    const baseProjectWhere = user.role === 'OWNER'
+      ? (projectId ? { projectId } : {})
+      : { project: { userId: user.id }, ...(projectId ? { projectId } : {}) };
+
+    const [urls, total, statusGroups] = await Promise.all([
       prisma.url.findMany({
         where,
         include: {
@@ -63,11 +67,22 @@ export async function GET(req: NextRequest) {
         take: limit,
       }),
       prisma.url.count({ where }),
+      prisma.url.groupBy({
+        by: ['status'],
+        where: baseProjectWhere,
+        _count: { _all: true },
+      }),
     ]);
+
+    const stats: Record<string, number> = {};
+    for (const g of statusGroups) {
+      stats[g.status] = g._count._all;
+    }
 
     return NextResponse.json({
       success: true,
       urls,
+      stats,
       pagination: {
         page,
         limit,

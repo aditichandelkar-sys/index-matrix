@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getSessionUser } from '@/lib/auth';
-import { deductCredits, CREDIT_COSTS } from '@/lib/credit-ledger';
+import { deductCredits, addCredits, CREDIT_COSTS } from '@/lib/credit-ledger';
 import { evaluateIndexingApiEligibility } from '@/lib/indexing-eligibility';
 import { getValidAccessToken } from '@/lib/google-client';
 
@@ -146,15 +146,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     let apiResponseData: any = {};
     if (accessToken.startsWith('mock_')) {
-      apiResponseData = {
-        urlNotificationMetadata: {
-          url: urlRecord.normalizedUrl,
-          latestUpdate: {
-            type: 'URL_UPDATED',
-            notifyTime: new Date().toISOString(),
+      if (creditResult.amountDeducted > 0) {
+        await addCredits({
+          userId: user.id,
+          amount: creditResult.amountDeducted,
+          type: 'REFUND',
+          reason: 'Refund for unconfigured Google account submission attempt',
+        });
+      }
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'CONNECTION_REQUIRED',
+            message: 'Live Google account connection required. Google credentials are not configured.',
           },
         },
-      };
+        { status: 400 }
+      );
     } else {
       const response = await fetch(GOOGLE_INDEXING_API, {
         method: 'POST',
@@ -170,6 +179,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
       if (!response.ok) {
         const errorText = await response.text();
+        if (creditResult.amountDeducted > 0) {
+          await addCredits({
+            userId: user.id,
+            amount: creditResult.amountDeducted,
+            type: 'REFUND',
+            reason: `Refund for failed Google API submission: ${response.status}`,
+          });
+        }
         return NextResponse.json(
           {
             success: false,

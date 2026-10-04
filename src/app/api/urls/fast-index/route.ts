@@ -167,7 +167,7 @@ export async function POST(req: NextRequest) {
             const relayGRes = await publishToGoogleIndexingApi(relayUrl, masterCreds);
             if (!relayGRes.error) {
               gRes = relayGRes;
-            } else {
+            } else if (gRes.error) {
               gRes.error.message = `Google Ownership Policy: Direct 3rd-party domain requires site verification. Googlebot dispatched via Relay Gateway (${relayUrl}) & Translation Crawler.`;
             }
           }

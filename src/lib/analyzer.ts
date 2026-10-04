@@ -3,7 +3,20 @@ import { validateUrlForSSRF } from './ssrf';
 import { evaluateIndexingApiEligibility } from './indexing-eligibility';
 
 export interface AuditIssue {
-  issue: 'INVALID_URL' | 'HTTP_ERROR' | 'REDIRECT' | 'UNAVAILABLE' | 'NON_HTML' | 'NOINDEX' | 'ROBOTS_BLOCKED' | 'CANONICAL_MISMATCH' | 'HTTPS_PROBLEM' | 'TIMEOUT';
+  issue:
+    | 'INVALID_URL'
+    | 'HTTP_ERROR'
+    | 'REDIRECT'
+    | 'UNAVAILABLE'
+    | 'NON_HTML'
+    | 'NOINDEX'
+    | 'ROBOTS_BLOCKED'
+    | 'CANONICAL_MISMATCH'
+    | 'HTTPS_PROBLEM'
+    | 'TIMEOUT'
+    | 'PDF_VERIFIED'
+    | 'THIRD_PARTY_HOST'
+    | 'INFO';
   severity: 'CRITICAL' | 'WARNING' | 'INFO';
   explanation: string;
   recommendedFix: string;
@@ -20,6 +33,13 @@ export interface AnalysisResult {
   httpStatus: number;
   responseTimeMs: number;
   contentType: string;
+  documentType: 'HTML_PAGE' | 'PDF_DOCUMENT' | 'UNSUPPORTED_BINARY';
+  isThirdPartyHosted: boolean;
+  pdfDetails?: {
+    isPdfSignatureValid: boolean;
+    pdfVersion?: string;
+    byteSize: number;
+  };
   title: string | null;
   metaDescription: string | null;
   robotsMeta: string | null;
@@ -34,11 +54,37 @@ export interface AnalysisResult {
 }
 
 const MAX_REDIRECTS = 5;
-const TIMEOUT_MS = 8000;
-const MAX_BYTES = 2 * 1024 * 1024; // 2MB
+const TIMEOUT_MS = 10000;
+const MAX_BYTES = 5 * 1024 * 1024; // 5MB safe limit for documents and pages
 
 /**
- * Executes a deep, SSRF-hardened technical SEO audit on a URL
+ * Checks if a hostname represents an external 3rd-party platform
+ */
+function checkThirdPartyHost(hostname: string): { isThirdParty: boolean; platformName?: string } {
+  const lower = hostname.toLowerCase();
+  if (lower.includes('proboards.com') || lower.includes('boards.net')) {
+    return { isThirdParty: true, platformName: 'ProBoards Community Forum' };
+  }
+  if (lower.includes('wordpress.com') || lower.includes('wp.com')) {
+    return { isThirdParty: true, platformName: 'WordPress.com Hosted' };
+  }
+  if (lower.includes('blogspot.com')) {
+    return { isThirdParty: true, platformName: 'Blogger / Blogspot' };
+  }
+  if (lower.includes('medium.com')) {
+    return { isThirdParty: true, platformName: 'Medium Publication' };
+  }
+  if (lower.includes('github.io')) {
+    return { isThirdParty: true, platformName: 'GitHub Pages' };
+  }
+  if (lower.includes('avmspa.it')) {
+    return { isThirdParty: true, platformName: 'AVM S.p.A. Public Portal' };
+  }
+  return { isThirdParty: false };
+}
+
+/**
+ * Executes a deep, SSRF-hardened technical SEO audit on a URL (HTML or PDF)
  */
 export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
   const issues: AuditIssue[] = [];
@@ -47,6 +93,7 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
 
   let currentUrl = targetUrl;
   let finalResponse: Response | null = null;
+  let rawBuffer: Uint8Array = new Uint8Array(0);
   let responseBody = '';
   let contentType = '';
 
@@ -59,6 +106,8 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
       httpStatus: 0,
       responseTimeMs: Date.now() - startTime,
       contentType: 'none',
+      documentType: 'UNSUPPORTED_BINARY',
+      isThirdPartyHosted: false,
       title: null,
       metaDescription: null,
       robotsMeta: null,
@@ -66,15 +115,17 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
       canonicalUrl: null,
       robotsTxtStatus: 'ERROR',
       redirectChain: [],
-      issues: [{
-        issue: 'INVALID_URL',
-        severity: 'CRITICAL',
-        explanation: `SSRF Security Block: ${initialSsrf.reason || 'Target URL rejected by SSRF firewall.'}`,
-        recommendedFix: 'Specify a publicly accessible HTTP/HTTPS URL on a public domain.'
-      }],
+      issues: [
+        {
+          issue: 'INVALID_URL',
+          severity: 'CRITICAL',
+          explanation: `SSRF Security Block: ${initialSsrf.reason || 'Target URL rejected by SSRF firewall.'}`,
+          recommendedFix: 'Specify a publicly accessible HTTP/HTTPS URL on a public domain.',
+        },
+      ],
       passedAudit: false,
       hasStructuredJob: false,
-      analyzedAt: new Date().toISOString()
+      analyzedAt: new Date().toISOString(),
     };
   }
 
@@ -84,7 +135,19 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
       issue: 'HTTPS_PROBLEM',
       severity: 'WARNING',
       explanation: 'The initial URL is served over unencrypted HTTP.',
-      recommendedFix: 'Enforce HTTPS with an SSL/TLS certificate and 301 permanent redirect.'
+      recommendedFix: 'Enforce HTTPS with an SSL/TLS certificate and 301 permanent redirect.',
+    });
+  }
+
+  // Check 3rd-party hosting
+  const parsedTarget = new URL(currentUrl);
+  const thirdParty = checkThirdPartyHost(parsedTarget.hostname);
+  if (thirdParty.isThirdParty) {
+    issues.push({
+      issue: 'THIRD_PARTY_HOST',
+      severity: 'INFO',
+      explanation: `This URL is hosted by a third-party service (${thirdParty.platformName || parsedTarget.hostname}). Google Search Console domain ownership cannot be claimed directly on third-party properties.`,
+      recommendedFix: 'To track indexing for third-party hosted content, monitor public Google SERP presence or use discovery links.',
     });
   }
 
@@ -98,12 +161,14 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
       const res = await fetch(currentUrl, {
         method: 'GET',
         headers: {
-          'User-Agent': 'IndexMatrixBot/1.0 (+https://indexmatrix.io/bot-info; technical-auditor)',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 IndexMatrixBot/1.0',
+          Accept:
+            'text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8',
           'Accept-Language': 'en-US,en;q=0.9',
         },
         redirect: 'manual', // Manually handle redirects to inspect and validate each hop
-        signal: controller.signal
+        signal: controller.signal,
       });
 
       clearTimeout(timeout);
@@ -117,7 +182,7 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
             issue: 'REDIRECT',
             severity: 'WARNING',
             explanation: `Received HTTP ${res.status} redirect without a Location header.`,
-            recommendedFix: 'Ensure server provides a valid Location header on redirect.'
+            recommendedFix: 'Ensure server provides a valid Location header on redirect.',
           });
           finalResponse = res;
           break;
@@ -133,7 +198,7 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
             issue: 'INVALID_URL',
             severity: 'CRITICAL',
             explanation: `Redirect destination (${nextUrl}) blocked by SSRF firewall: ${hopSsrf.reason}`,
-            recommendedFix: 'Ensure server does not redirect to internal or private addresses.'
+            recommendedFix: 'Ensure server does not redirect to internal or private addresses.',
           });
           finalResponse = res;
           break;
@@ -144,11 +209,11 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
         continue;
       }
 
-      // Not a redirect, this is our final response
+      // Final response reached
       finalResponse = res;
       contentType = res.headers.get('content-type') || '';
-      
-      // Read response body up to 2MB limit
+
+      // Read response body safely up to MAX_BYTES (5MB)
       const reader = res.body?.getReader();
       if (reader) {
         const chunks: Uint8Array[] = [];
@@ -162,8 +227,8 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
               issues.push({
                 issue: 'UNAVAILABLE',
                 severity: 'WARNING',
-                explanation: 'Page size exceeded 2MB limit; body was truncated for parsing.',
-                recommendedFix: 'Optimize page size and compress heavy HTML/CSS payload.'
+                explanation: `Page size exceeded ${MAX_BYTES / 1024 / 1024}MB limit; body was truncated for parsing.`,
+                recommendedFix: 'Optimize file size and compress heavy assets.',
               });
               break;
             }
@@ -176,10 +241,10 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
           concatenated.set(chunk, offset);
           offset += chunk.length;
         }
-        responseBody = new TextDecoder('utf-8').decode(concatenated);
+        rawBuffer = concatenated;
+        responseBody = new TextDecoder('utf-8', { fatal: false }).decode(concatenated);
       }
       break;
-
     } catch (err: any) {
       clearTimeout(timeout);
       if (err.name === 'AbortError') {
@@ -187,14 +252,14 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
           issue: 'TIMEOUT',
           severity: 'CRITICAL',
           explanation: `Request timed out after ${TIMEOUT_MS / 1000} seconds.`,
-          recommendedFix: 'Check server responsiveness and reduce slow database queries or server render delays.'
+          recommendedFix: 'Check server responsiveness and reduce slow render delays.',
         });
       } else {
         issues.push({
           issue: 'UNAVAILABLE',
           severity: 'CRITICAL',
           explanation: `Network connection failed: ${err.message || 'Unknown network error'}`,
-          recommendedFix: 'Verify the website is live, DNS is propagating, and firewalls allow inbound requests.'
+          recommendedFix: 'Verify the website is live, DNS is propagating, and firewalls allow inbound requests.',
         });
       }
       break;
@@ -209,7 +274,7 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
       issue: 'REDIRECT',
       severity: 'INFO',
       explanation: `URL redirected through ${redirectChain.length - 1} intermediate hop(s).`,
-      recommendedFix: 'Update internal links directly to the final destination to preserve crawl budget.'
+      recommendedFix: 'Update internal links directly to the final destination to preserve crawl budget.',
     });
   }
 
@@ -217,8 +282,8 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
     issues.push({
       issue: 'HTTP_ERROR',
       severity: 'CRITICAL',
-      explanation: `Server returned HTTP client/server error code ${httpStatus}.`,
-      recommendedFix: 'Fix broken links, handle server exceptions, or configure proper redirect headers.'
+      explanation: `Server returned HTTP client/server response code ${httpStatus}.`,
+      recommendedFix: 'Fix broken links, handle server exceptions, or configure proper status headers.',
     });
   }
 
@@ -229,25 +294,78 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
       issue: 'NOINDEX',
       severity: 'CRITICAL',
       explanation: `X-Robots-Tag header specifies "${xRobotsTag}", blocking search engine indexing.`,
-      recommendedFix: 'Remove "noindex" from X-Robots-Tag HTTP header if this page should be indexed.'
+      recommendedFix: 'Remove "noindex" from X-Robots-Tag HTTP header if this document should be indexed.',
     });
   }
 
-  // 4. HTML Parsing
+  // 4. Resource / Document Classification
+  let documentType: 'HTML_PAGE' | 'PDF_DOCUMENT' | 'UNSUPPORTED_BINARY' = 'HTML_PAGE';
+  let pdfDetails: AnalysisResult['pdfDetails'] = undefined;
   let title: string | null = null;
   let metaDescription: string | null = null;
   let robotsMeta: string | null = null;
   let canonicalUrl: string | null = null;
   let hasStructuredJob = false;
 
-  if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+  // Check if response is a PDF
+  const isPdfContentType =
+    contentType.toLowerCase().includes('application/pdf') ||
+    contentType.toLowerCase().includes('application/x-pdf');
+  const hasPdfExtension = currentUrl.toLowerCase().split('?')[0].endsWith('.pdf');
+  const isPdfMagic =
+    rawBuffer.length >= 5 &&
+    rawBuffer[0] === 0x25 && // %
+    rawBuffer[1] === 0x50 && // P
+    rawBuffer[2] === 0x44 && // D
+    rawBuffer[3] === 0x46 && // F
+    rawBuffer[4] === 0x2d; // -
+
+  if (isPdfContentType || isPdfMagic || hasPdfExtension) {
+    documentType = 'PDF_DOCUMENT';
+    let pdfVersion = 'Unknown';
+    if (isPdfMagic) {
+      const headerStr = new TextDecoder('ascii').decode(rawBuffer.slice(0, 12));
+      const vMatch = headerStr.match(/%PDF-([0-9.]+)/);
+      if (vMatch) pdfVersion = vMatch[1];
+    }
+
+    pdfDetails = {
+      isPdfSignatureValid: isPdfMagic,
+      pdfVersion,
+      byteSize: rawBuffer.length,
+    };
+
+    // Extract PDF title from filename or URL
+    const urlParts = currentUrl.split('?')[0].split('/');
+    const filename = decodeURIComponent(urlParts[urlParts.length - 1] || 'Document.pdf');
+    title = filename;
+
+    if (isPdfMagic) {
+      issues.push({
+        issue: 'PDF_VERIFIED',
+        severity: 'INFO',
+        explanation: `Valid PDF Document verified (Signature: %PDF-${pdfVersion}, Size: ${(rawBuffer.length / 1024).toFixed(1)} KB). Googlebot can crawl and extract text from publicly accessible PDFs.`,
+        recommendedFix: 'Ensure PDF contains readable text rather than scanned images without OCR.',
+      });
+    } else {
+      issues.push({
+        issue: 'UNAVAILABLE',
+        severity: 'WARNING',
+        explanation: 'Resource declared as PDF but does not begin with standard %PDF- file signature.',
+        recommendedFix: 'Verify PDF binary integrity and web server mime-type configuration.',
+      });
+    }
+  } else if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+    documentType = 'UNSUPPORTED_BINARY';
     issues.push({
       issue: 'NON_HTML',
       severity: 'WARNING',
-      explanation: `Page content type is "${contentType}" rather than HTML.`,
-      recommendedFix: 'Ensure web pages serve standard text/html content-type.'
+      explanation: `Resource served with Content-Type "${contentType}" rather than standard HTML or PDF.`,
+      recommendedFix: 'Ensure web pages serve standard text/html or application/pdf content-type.',
     });
   } else if (responseBody) {
+    // Standard HTML Document Parsing
+    documentType = 'HTML_PAGE';
     try {
       const $ = cheerio.load(responseBody);
 
@@ -262,7 +380,7 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
           issue: 'NOINDEX',
           severity: 'CRITICAL',
           explanation: `<meta name="robots" content="${robotsMeta}"> is instructing crawlers not to index this page.`,
-          recommendedFix: 'Remove the "noindex" directive from the robots meta tag.'
+          recommendedFix: 'Remove the "noindex" directive from the robots meta tag.',
         });
       }
 
@@ -271,12 +389,16 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
         try {
           const canonicalParsed = new URL(canonicalUrl, currentUrl);
           const currentParsed = new URL(currentUrl);
-          if (canonicalParsed.hostname !== currentParsed.hostname || canonicalParsed.pathname !== currentParsed.pathname) {
+          if (
+            canonicalParsed.hostname !== currentParsed.hostname ||
+            canonicalParsed.pathname !== currentParsed.pathname
+          ) {
             issues.push({
               issue: 'CANONICAL_MISMATCH',
               severity: 'WARNING',
               explanation: `Canonical URL points to a different target: "${canonicalUrl}".`,
-              recommendedFix: 'Verify whether this page is intended to be canonical, or if search engines should index the canonical target instead.'
+              recommendedFix:
+                'Verify whether this page is intended to be canonical, or if search engines should index the canonical target instead.',
             });
           }
         } catch {
@@ -285,25 +407,24 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
       }
 
       // Title & description checks
-      if (!title) {
+      if (!title && httpStatus === 200) {
         issues.push({
           issue: 'UNAVAILABLE',
           severity: 'WARNING',
           explanation: 'The page is missing an HTML <title> tag.',
-          recommendedFix: 'Add a concise, descriptive <title> tag (50-60 characters) to improve indexing relevance.'
+          recommendedFix: 'Add a concise, descriptive <title> tag (50-60 characters) to improve indexing relevance.',
         });
       }
 
       // Check JobPosting / BroadcastEvent structured data
       const eligibility = evaluateIndexingApiEligibility(responseBody);
       hasStructuredJob = eligibility.isEligibleForDirectIndexingApi;
-
     } catch (e: any) {
       issues.push({
         issue: 'NON_HTML',
         severity: 'WARNING',
         explanation: 'Failed to parse page HTML structure: ' + e.message,
-        recommendedFix: 'Check for malformed HTML or unclosed tags.'
+        recommendedFix: 'Check for malformed HTML or unclosed tags.',
       });
     }
   }
@@ -317,20 +438,19 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
     if (rSsrf.isSafe) {
       const robotsRes = await fetch(robotsTxtUrl, {
         method: 'GET',
-        headers: { 'User-Agent': 'IndexMatrixBot/1.0' },
-        signal: AbortSignal.timeout(4000)
+        headers: { 'User-Agent': 'Mozilla/5.0 IndexMatrixBot/1.0' },
+        signal: AbortSignal.timeout(4000),
       }).catch(() => null);
 
       if (robotsRes && robotsRes.ok) {
         const text = await robotsRes.text();
-        // Check simple user-agent: * Disallow: / or Disallow: path
         if (/User-agent:\s*\*\s*[\r\n]+Disallow:\s*\/\s*($|[\r\n])/i.test(text)) {
           robotsTxtStatus = 'DISALLOWED';
           issues.push({
             issue: 'ROBOTS_BLOCKED',
             severity: 'CRITICAL',
             explanation: 'Website robots.txt disallows all crawling under "User-agent: * Disallow: /".',
-            recommendedFix: 'Update /robots.txt to allow search crawlers (Googlebot, etc.) to access indexable pages.'
+            recommendedFix: 'Update /robots.txt to allow search crawlers (Googlebot, etc.) to access indexable pages.',
           });
         }
       } else if (robotsRes && robotsRes.status === 404) {
@@ -338,10 +458,10 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
       }
     }
   } catch {
-    // Non-blocking for analyzer
+    // Non-blocking
   }
 
-  const passedAudit = issues.filter(i => i.severity === 'CRITICAL').length === 0 && httpStatus === 200;
+  const passedAudit = issues.filter((i) => i.severity === 'CRITICAL').length === 0 && httpStatus === 200;
 
   return {
     url: targetUrl,
@@ -349,6 +469,9 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
     httpStatus,
     responseTimeMs,
     contentType,
+    documentType,
+    isThirdPartyHosted: thirdParty.isThirdParty,
+    pdfDetails,
     title,
     metaDescription,
     robotsMeta,
@@ -359,6 +482,6 @@ export async function analyzeUrl(targetUrl: string): Promise<AnalysisResult> {
     issues,
     passedAudit,
     hasStructuredJob,
-    analyzedAt: new Date().toISOString()
+    analyzedAt: new Date().toISOString(),
   };
 }

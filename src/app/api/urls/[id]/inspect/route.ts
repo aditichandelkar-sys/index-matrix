@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getSessionUser } from '@/lib/auth';
-import { deductCredits, CREDIT_COSTS } from '@/lib/credit-ledger';
+import { deductCredits, addCredits, CREDIT_COSTS } from '@/lib/credit-ledger';
 import { inspectUrlWithGoogle } from '@/lib/google-client';
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -69,11 +69,33 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     // Call official URL Inspection API
-    const inspection = await inspectUrlWithGoogle(
-      googleAccount.id,
-      urlRecord.normalizedUrl,
-      property.propertyUrl
-    );
+    let inspection: any;
+    try {
+      inspection = await inspectUrlWithGoogle(
+        googleAccount.id,
+        urlRecord.normalizedUrl,
+        property.propertyUrl
+      );
+    } catch (apiErr: any) {
+      if (creditResult.amountDeducted > 0) {
+        await addCredits({
+          userId: user.id,
+          amount: creditResult.amountDeducted,
+          type: 'REFUND',
+          reason: `Refund for failed Google inspection: ${apiErr.message}`,
+        });
+      }
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: apiErr.message?.includes('CONNECTION_REQUIRED') ? 'CONNECTION_REQUIRED' : 'GOOGLE_INSPECTION_FAILED',
+            message: apiErr.message,
+          },
+        },
+        { status: 400 }
+      );
+    }
 
     const ir = inspection.inspectionResult;
 

@@ -20,7 +20,7 @@ export const GOOGLE_OAUTH_SCOPES = [
  */
 export function buildGoogleAuthUrl(state: string): string {
   const clientId = process.env.GOOGLE_CLIENT_ID || '';
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/v1/google/callback';
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/google/callback';
 
   const params = new URLSearchParams({
     client_id: clientId,
@@ -49,16 +49,11 @@ export interface GoogleTokens {
 export async function exchangeCodeForTokens(code: string): Promise<GoogleTokens> {
   const clientId = process.env.GOOGLE_CLIENT_ID || '';
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/v1/google/callback';
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/google/callback';
 
-  // If in mock/test environment without real credentials, provide simulated token exchange
-  if (clientId.startsWith('mock-') || !clientSecret || clientSecret.startsWith('mock-')) {
-    return {
-      accessToken: 'mock_access_token_' + Date.now(),
-      refreshToken: 'mock_refresh_token_' + Date.now(),
-      expiresIn: 3600,
-      scope: GOOGLE_OAUTH_SCOPES.join(' '),
-    };
+  // Do not fake OAuth tokens in production!
+  if (!clientId || clientId.startsWith('mock-') || !clientSecret || clientSecret.startsWith('mock-')) {
+    throw new Error('Google OAuth credentials are NOT_CONFIGURED. Please configure valid GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in environment variables.');
   }
 
   const response = await fetch(GOOGLE_TOKEN_ENDPOINT, {
@@ -182,12 +177,7 @@ export async function listSearchConsoleProperties(accountId: string): Promise<Se
   const accessToken = await getValidAccessToken(accountId);
 
   if (accessToken.startsWith('mock_')) {
-    // Return sample properties for sandbox mode
-    return [
-      { siteUrl: 'sc-domain:example.com', permissionLevel: 'siteOwner' },
-      { siteUrl: 'https://example.com/', permissionLevel: 'siteOwner' },
-      { siteUrl: 'https://example.com/blog/', permissionLevel: 'siteFullUser' },
-    ];
+    throw new Error('CONNECTION_REQUIRED: Live Google account authorization required to retrieve Search Console properties.');
   }
 
   const res = await fetch(SEARCH_CONSOLE_SITES_API, {
@@ -237,22 +227,7 @@ export async function inspectUrlWithGoogle(
   const accessToken = await getValidAccessToken(accountId);
 
   if (accessToken.startsWith('mock_')) {
-    // Simulated realistic inspection result for testing & sandbox mode
-    const isExampleDomain = inspectionUrl.includes('example.com');
-    return {
-      inspectionResult: {
-        verdict: isExampleDomain ? 'PASS' : 'NEUTRAL',
-        coverageState: isExampleDomain ? 'Submitted and indexed' : 'Discovered - currently not indexed',
-        robotsTxtState: 'ALLOWED',
-        indexingState: 'INDEXING_ALLOWED',
-        pageFetchState: 'SUCCESSFUL',
-        googleCanonical: inspectionUrl,
-        userCanonical: inspectionUrl,
-        crawledAs: 'GOOGLEBOT_DESKTOP',
-        lastCrawlTime: new Date(Date.now() - 86400000 * 2).toISOString(),
-      },
-      raw: { simulated: true, testedAt: new Date().toISOString() },
-    };
+    throw new Error('CONNECTION_REQUIRED: Live Google account authorization required to inspect URLs via official Google URL Inspection API.');
   }
 
   const res = await fetch(URL_INSPECTION_API, {

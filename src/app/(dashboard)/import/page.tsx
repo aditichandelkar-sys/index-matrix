@@ -125,7 +125,7 @@ function BulkImportContent() {
             </div>
             <div className="pt-2">
               <Link
-                href={`/dashboard/urls?projectId=${projectId}`}
+                href={`/urls?projectId=${projectId}`}
                 className="inline-flex items-center gap-1.5 text-xs text-brand-300 hover:text-white font-semibold"
               >
                 <span>View Imported URLs in Table</span>

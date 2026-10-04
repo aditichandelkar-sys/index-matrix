@@ -21,7 +21,7 @@ export default function DashboardHeader({ title, description, children }: Dashbo
       <div className="flex items-center gap-3">
         {children}
         <Link
-          href="/dashboard/import"
+          href="/import"
           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-xs font-semibold transition-all"
         >
           <UploadCloud className="w-4 h-4 text-cyan-400" />

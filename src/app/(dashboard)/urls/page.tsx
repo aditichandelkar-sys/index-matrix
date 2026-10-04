@@ -526,6 +526,8 @@ function UrlsManagerContent() {
                             className={`p-2.5 rounded-lg border text-xs ${
                               iss.severity === 'CRITICAL'
                                 ? 'bg-rose-500/10 border-rose-500/20 text-rose-300'
+                                : iss.severity === 'INFO'
+                                ? 'bg-cyan-500/10 border-cyan-500/20 text-cyan-300'
                                 : 'bg-amber-500/10 border-amber-500/20 text-amber-300'
                             }`}
                           >

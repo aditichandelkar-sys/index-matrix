@@ -11,16 +11,16 @@ export async function GET(req: NextRequest) {
     const error = searchParams.get('error');
 
     if (error) {
-      return NextResponse.redirect(new URL(`/dashboard/google?error=${encodeURIComponent(error)}`, req.url));
+      return NextResponse.redirect(new URL(`/google?error=${encodeURIComponent(error)}`, req.url));
     }
 
     if (!code || !state) {
-      return NextResponse.redirect(new URL('/dashboard/google?error=missing_code_or_state', req.url));
+      return NextResponse.redirect(new URL('/google?error=missing_code_or_state', req.url));
     }
 
     const userId = state.split(':')[0];
     if (!userId) {
-      return NextResponse.redirect(new URL('/dashboard/google?error=invalid_state', req.url));
+      return NextResponse.redirect(new URL('/google?error=invalid_state', req.url));
     }
 
     const tokens = await exchangeCodeForTokens(code);
@@ -66,10 +66,10 @@ export async function GET(req: NextRequest) {
       console.warn('Could not auto-fetch properties immediately:', e);
     }
 
-    return NextResponse.redirect(new URL('/dashboard/google?success=connected', req.url));
+    return NextResponse.redirect(new URL('/google?success=connected', req.url));
   } catch (err: any) {
     return NextResponse.redirect(
-      new URL(`/dashboard/google?error=${encodeURIComponent(err.message || 'unknown')}`, req.url)
+      new URL(`/google?error=${encodeURIComponent(err.message || 'unknown')}`, req.url)
     );
   }
 }

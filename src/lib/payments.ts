@@ -58,7 +58,7 @@ export async function createCheckoutSession(
   if (provider === 'sandbox') {
     // Sandbox instant verification link
     return {
-      checkoutUrl: `/dashboard/payments?sandbox_verify=${orderId}`,
+      checkoutUrl: `/payments?sandbox_verify=${orderId}`,
       orderId,
       provider: 'sandbox',
       amountCents: pkg.priceCents,

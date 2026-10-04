@@ -53,13 +53,14 @@ export default function DashboardOverviewPage() {
 
       const urls = urlsData.urls || [];
       const total = urlsData.pagination?.total || urls.length;
+      const stats = urlsData.stats || {};
 
-      const analyzed = urls.filter((u: any) => u.status === 'ANALYZED').length;
-      const submitted = urls.filter((u: any) => u.status === 'SUBMITTED').length;
-      const indexed = urls.filter((u: any) => u.status === 'INDEXED').length;
-      const notIndexed = urls.filter((u: any) => u.status === 'NOT_INDEXED').length;
-      const blocked = urls.filter((u: any) => u.status === 'BLOCKED').length;
-      const errors = urls.filter((u: any) => u.status === 'ERROR').length;
+      const analyzed = stats.ANALYZED || 0;
+      const submitted = stats.SUBMITTED || 0;
+      const indexed = stats.INDEXED || 0;
+      const notIndexed = stats.NOT_INDEXED || 0;
+      const blocked = stats.BLOCKED || 0;
+      const errors = stats.ERROR || 0;
 
       let connCount = 0;
       if (googleData.success && googleData.accounts) {
@@ -148,7 +149,7 @@ export default function DashboardOverviewPage() {
               {projects.slice(0, 3).map((p) => (
                 <Link
                   key={p.id}
-                  href={`/dashboard/urls?projectId=${p.id}`}
+                  href={`/urls?projectId=${p.id}`}
                   className="flex items-center justify-between p-3 rounded-xl bg-[#090e1a] border border-white/5 hover:border-brand-500/30 text-xs transition-all"
                 >
                   <div className="flex flex-col">
@@ -160,7 +161,7 @@ export default function DashboardOverviewPage() {
               ))}
             </div>
             <Link
-              href="/dashboard/projects"
+              href="/projects"
               className="inline-flex items-center gap-1.5 text-xs text-brand-400 hover:text-brand-300 font-semibold"
             >
               <span>Manage All Projects</span>
@@ -190,7 +191,7 @@ export default function DashboardOverviewPage() {
               </div>
             </div>
             <Link
-              href="/dashboard/google"
+              href="/google"
               className="inline-flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 font-semibold"
             >
               <span>View Search Console Properties</span>
@@ -219,7 +220,7 @@ export default function DashboardOverviewPage() {
               </div>
             </div>
             <Link
-              href="/dashboard/credits"
+              href="/credits"
               className="inline-flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300 font-semibold"
             >
               <span>View Transaction History</span>
@@ -236,7 +237,7 @@ export default function DashboardOverviewPage() {
               <p className="text-xs text-slate-400">Latest analyzed, inspected, and queued pages</p>
             </div>
             <Link
-              href="/dashboard/urls"
+              href="/urls"
               className="text-xs text-brand-400 hover:text-brand-300 font-semibold flex items-center gap-1"
             >
               View Full Table <ArrowRight className="w-3.5 h-3.5" />
@@ -290,7 +291,7 @@ export default function DashboardOverviewPage() {
                       </td>
                       <td className="px-5 py-3.5 text-right">
                         <Link
-                          href={`/dashboard/urls?id=${u.id}`}
+                          href={`/urls?id=${u.id}`}
                           className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-brand-300 hover:text-white font-medium text-[11px] transition-colors"
                         >
                           Details

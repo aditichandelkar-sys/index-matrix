@@ -101,7 +101,7 @@ export default function Sidebar() {
               OWNER
             </span>
           ) : (
-            <Link href="/dashboard/payments" className="text-brand-400 hover:text-brand-300 font-semibold text-[11px]">
+            <Link href="/payments" className="text-brand-400 hover:text-brand-300 font-semibold text-[11px]">
               + Buy More
             </Link>
           )}

@@ -158,13 +158,13 @@ export default function ProjectsPage() {
 
                 <div className="mt-6 flex items-center gap-2">
                   <Link
-                    href={`/dashboard/urls?projectId=${p.id}`}
+                    href={`/urls?projectId=${p.id}`}
                     className="flex-1 text-center py-2 px-3 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-semibold text-xs transition-all"
                   >
                     View URLs
                   </Link>
                   <Link
-                    href={`/dashboard/import?projectId=${p.id}`}
+                    href={`/import?projectId=${p.id}`}
                     className="py-2 px-3 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 font-medium text-xs transition-all"
                   >
                     Import
